@@ -29,6 +29,7 @@ export LD_LIBRARY_PATH=/usr/local/cuda-11.8/lib64:\$LD_LIBRARY_PATH
 
 # Initialize conda - adjust path if needed
 source ~/.bashrc
+source /mnt/home/daaboul/miniconda3/etc/profile.d/conda.sh
 conda activate env_isaaclab
 
 # Create output directory
