@@ -37,7 +37,7 @@ from fast_td3.fast_td3_utils import (
     save_params,
     mark_step,
 )
-from hyperparams import get_args
+from fast_td3.hyperparams import get_args
 
 torch.set_float32_matmul_precision("high")
 
