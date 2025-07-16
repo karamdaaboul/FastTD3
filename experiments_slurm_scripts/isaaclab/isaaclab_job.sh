@@ -35,9 +35,8 @@ conda activate env_isaaclab
 mkdir -p outputs/\${SLURM_JOB_ID}
 
 # Change to your FastTD3 directory - adjust path as needed
-cd /mnt/home/\${USER}/projects/FastTD3/
-export PYTHONPATH=\$PYTHONPATH:/mnt/home/\${USER}/projects/FastTD3
-export PYTHONPATH=\$PYTHONPATH:/mnt/home/\${USER}/projects/FastTD3/fast_td3
+cd /mnt/home/\${USER}/workspaces/FastTD3/
+export PYTHONPATH=/mnt/home/${USER}/workspaces/FastTD3/:$PYTHONPATH
 
 # Run the training with IsaacLab-specific parameters
 python -m fast_td3.train \\

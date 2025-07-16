@@ -29,7 +29,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 from torch.amp import autocast, GradScaler
 from tensordict import TensorDict
-from fast_td3_utils import (
+from fast_td3.fast_td3_utils import (
     EmpiricalNormalization,
     RewardNormalizer,
     PerTaskRewardNormalizer,
