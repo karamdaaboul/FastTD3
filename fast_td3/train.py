@@ -96,7 +96,7 @@ def main():
             args.env_name, 1, render_mode="rgb_array", device=device
         )
     elif args.env_name.startswith("Isaac-"):
-        from environments.isaaclab_env import IsaacLabEnv
+        from fast_td3.environments.isaaclab_env import IsaacLabEnv
 
         env_type = "isaaclab"
         envs = IsaacLabEnv(
@@ -109,7 +109,7 @@ def main():
         eval_envs = envs
         render_env = envs
     elif args.env_name.startswith("MTBench-"):
-        from environments.mtbench_env import MTBenchEnv
+        from fast_td3.environments.mtbench_env import MTBenchEnv
 
         env_name = "-".join(args.env_name.split("-")[1:])
         env_type = "mtbench"
@@ -117,7 +117,7 @@ def main():
         eval_envs = envs
         render_env = envs
     else:
-        from environments.mujoco_playground_env import make_env
+        from fast_td3.environments.mujoco_playground_env import make_env
 
         # TODO: Check if re-using same envs for eval could reduce memory usage
         env_type = "mujoco_playground"
