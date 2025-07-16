@@ -124,6 +124,8 @@ class BaseArgs:
     """the weight decay of the optimizer"""
     save_interval: int = 5000
     """the interval to save the model"""
+    critic_type: str = "distributional"
+    """the type of the critic"""
 
 
 def get_args():

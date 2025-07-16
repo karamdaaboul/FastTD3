@@ -13,7 +13,6 @@ os.environ["JAX_DEFAULT_MATMUL_PRECISION"] = "highest"
 import random
 import time
 import math
-
 import tqdm
 import wandb
 import numpy as np
@@ -29,9 +28,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.amp import autocast, GradScaler
-
 from tensordict import TensorDict
-
 from fast_td3_utils import (
     EmpiricalNormalization,
     RewardNormalizer,
@@ -136,11 +133,11 @@ def main():
         )
 
     n_act = envs.num_actions
-    n_obs = envs.num_obs if type(envs.num_obs) == int else envs.num_obs[0]
+    n_obs = envs.num_obs if isinstance(envs.num_obs, int) else envs.num_obs[0]
     if envs.asymmetric_obs:
         n_critic_obs = (
             envs.num_privileged_obs
-            if type(envs.num_privileged_obs) == int
+            if isinstance(envs.num_privileged_obs, int)
             else envs.num_privileged_obs[0]
         )
     else:
@@ -321,7 +318,9 @@ def main():
         # Run for a fixed number of steps
         for i in range(eval_envs.max_episode_steps):
             with torch.no_grad(), autocast(
-                device_type=amp_device_type, dtype=amp_dtype, enabled=amp_enabled
+                device_type=amp_device_type,
+                dtype=amp_dtype,
+                enabled=amp_enabled,
             ):
                 obs = normalize_obs(obs, update=False)
                 actions = actor(obs)
@@ -331,7 +330,8 @@ def main():
             if env_type == "mtbench":
                 # We only report success rate in MTBench evaluation
                 rewards = (
-                    infos["episode"]["success"].float() if "episode" in infos else 0.0
+                    infos["episode"]["success"].float()
+                    if "episode" in infos else 0.0
                 )
             episode_returns = torch.where(
                 ~done_masks, episode_returns + rewards, episode_returns
@@ -363,7 +363,9 @@ def main():
             renders = [render_env.state]
         for i in range(render_env.max_episode_steps):
             with torch.no_grad(), autocast(
-                device_type=amp_device_type, dtype=amp_dtype, enabled=amp_enabled
+                device_type=amp_device_type,
+                dtype=amp_dtype,
+                enabled=amp_enabled,
             ):
                 obs = normalize_obs(obs, update=False)
                 actions = actor(obs)
@@ -414,39 +416,61 @@ def main():
             )
             discount = args.gamma ** data["next"]["effective_n_steps"]
 
-            with torch.no_grad():
-                qf1_next_target_projected, qf2_next_target_projected = (
-                    qnet_target.projection(
-                        next_critic_observations,
-                        next_state_actions,
-                        rewards,
-                        bootstrap,
-                        discount,
+            if args.critic_type == "distributional":
+                with torch.no_grad():
+                    qf1_next_target_projected, qf2_next_target_projected = (
+                        qnet_target.projection(
+                            next_critic_observations,
+                            next_state_actions,
+                            rewards,
+                            bootstrap,
+                            discount,
+                        )
                     )
-                )
-                qf1_next_target_value = qnet_target.get_value(qf1_next_target_projected)
-                qf2_next_target_value = qnet_target.get_value(qf2_next_target_projected)
-                if args.use_cdq:
-                    qf_next_target_dist = torch.where(
-                        qf1_next_target_value.unsqueeze(1)
-                        < qf2_next_target_value.unsqueeze(1),
-                        qf1_next_target_projected,
-                        qf2_next_target_projected,
-                    )
-                    qf1_next_target_dist = qf2_next_target_dist = qf_next_target_dist
-                else:
-                    qf1_next_target_dist, qf2_next_target_dist = (
-                        qf1_next_target_projected,
-                        qf2_next_target_projected,
-                    )
+                    qf1_next_target_value = qnet_target.get_value(qf1_next_target_projected)
+                    qf2_next_target_value = qnet_target.get_value(qf2_next_target_projected)
+                    if args.use_cdq:
+                        qf_next_target_dist = torch.where(
+                            qf1_next_target_value.unsqueeze(1)
+                            < qf2_next_target_value.unsqueeze(1),
+                            qf1_next_target_projected,
+                            qf2_next_target_projected,
+                        )
+                        qf1_next_target_dist = qf2_next_target_dist = (
+                            qf_next_target_dist
+                        )
+                    else:
+                        qf1_next_target_dist, qf2_next_target_dist = (
+                            qf1_next_target_projected,
+                            qf2_next_target_projected,
+                        )
 
-            qf1, qf2 = qnet(critic_observations, actions)
-            qf1_loss = -torch.sum(
-                qf1_next_target_dist * F.log_softmax(qf1, dim=1), dim=1
-            ).mean()
-            qf2_loss = -torch.sum(
-                qf2_next_target_dist * F.log_softmax(qf2, dim=1), dim=1
-            ).mean()
+                qf1, qf2 = qnet(critic_observations, actions)
+                qf1_loss = -torch.sum(
+                    qf1_next_target_dist * F.log_softmax(qf1, dim=1), dim=1
+                ).mean()
+                qf2_loss = -torch.sum(
+                    qf2_next_target_dist * F.log_softmax(qf2, dim=1), dim=1
+                ).mean()
+            else:
+                with torch.no_grad():
+                    q1_next, q2_next = qnet_target(
+                        next_critic_observations, next_state_actions
+                    )
+                    q1_next_val = qnet_target.get_value(q1_next)
+                    q2_next_val = qnet_target.get_value(q2_next)
+                    if args.use_cdq:
+                        target_q = torch.minimum(q1_next_val, q2_next_val)
+                    else:
+                        target_q = 0.5 * (q1_next_val + q2_next_val)
+                    target_q = rewards + bootstrap * discount * target_q
+
+                q1_pred, q2_pred = qnet(critic_observations, actions)
+                q1_pred_val = qnet.get_value(q1_pred)
+                q2_pred_val = qnet.get_value(q2_pred)
+                qf1_loss = F.mse_loss(q1_pred_val, target_q)
+                qf2_loss = F.mse_loss(q2_pred_val, target_q)
+                
             qf_loss = qf1_loss + qf2_loss
 
         q_optimizer.zero_grad(set_to_none=True)
@@ -480,8 +504,12 @@ def main():
             )
 
             qf1, qf2 = qnet(critic_observations, actor(data["observations"]))
-            qf1_value = qnet.get_value(F.softmax(qf1, dim=1))
-            qf2_value = qnet.get_value(F.softmax(qf2, dim=1))
+            if args.critic_type == "distributional":
+                qf1_value = qnet.get_value(F.softmax(qf1, dim=1))
+                qf2_value = qnet.get_value(F.softmax(qf2, dim=1))
+            else:
+                qf1_value = qnet.get_value(qf1)
+                qf2_value = qnet.get_value(qf2)
             if args.use_cdq:
                 qf_value = torch.minimum(qf1_value, qf2_value)
             else:

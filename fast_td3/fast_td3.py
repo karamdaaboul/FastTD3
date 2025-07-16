@@ -80,6 +80,34 @@ class DistributionalQNetwork(nn.Module):
         return proj_dist
 
 
+class QNetwork(nn.Module):
+    """
+    Classic scalar-valued critic.
+    """
+    def __init__(
+        self,
+        n_obs: int,
+        n_act: int,
+        hidden_dim: int,
+        device: torch.device = None,
+    ):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(n_obs + n_act, hidden_dim, device=device),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim // 2, device=device),
+            nn.ReLU(),
+            nn.Linear(hidden_dim // 2, hidden_dim // 4, device=device),
+            nn.ReLU(),
+            nn.Linear(hidden_dim // 4, 1, device=device),  # Output 1 scalar instead of num_atoms
+        )
+
+    def forward(self, obs: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
+        x = torch.cat([obs, actions], 1)
+        x = self.net(x)
+        return x  # Returns (batch_size, 1)
+
+
 class Critic(nn.Module):
     def __init__(
         self,
@@ -90,30 +118,47 @@ class Critic(nn.Module):
         v_max: float,
         hidden_dim: int,
         device: torch.device = None,
+        critic_type: str = "distributional",
     ):
         super().__init__()
-        self.qnet1 = DistributionalQNetwork(
-            n_obs=n_obs,
-            n_act=n_act,
-            num_atoms=num_atoms,
-            v_min=v_min,
-            v_max=v_max,
-            hidden_dim=hidden_dim,
-            device=device,
-        )
-        self.qnet2 = DistributionalQNetwork(
-            n_obs=n_obs,
-            n_act=n_act,
-            num_atoms=num_atoms,
-            v_min=v_min,
-            v_max=v_max,
-            hidden_dim=hidden_dim,
-            device=device,
-        )
-
-        self.register_buffer(
-            "q_support", torch.linspace(v_min, v_max, num_atoms, device=device)
-        )
+        self.critic_type = critic_type
+        if critic_type == "distributional":
+            self.qnet1 = DistributionalQNetwork(
+                n_obs=n_obs,
+                n_act=n_act,
+                num_atoms=num_atoms,
+                v_min=v_min,
+                v_max=v_max,
+                hidden_dim=hidden_dim,
+                device=device,
+            )
+            self.qnet2 = DistributionalQNetwork(
+                n_obs=n_obs,
+                n_act=n_act,
+                num_atoms=num_atoms,
+                v_min=v_min,
+                v_max=v_max,
+                hidden_dim=hidden_dim,
+                device=device,
+            )
+            self.register_buffer(
+                "q_support",
+                torch.linspace(v_min, v_max, num_atoms, device=device),
+            )
+        else:
+            self.qnet1 = QNetwork(
+                n_obs=n_obs,
+                n_act=n_act,
+                hidden_dim=hidden_dim,
+                device=device,
+            )
+            self.qnet2 = QNetwork(
+                n_obs=n_obs,
+                n_act=n_act,
+                hidden_dim=hidden_dim,
+                device=device,
+            )
+            self.q_support = None
         self.device = device
 
     def forward(self, obs: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
@@ -127,30 +172,44 @@ class Critic(nn.Module):
         bootstrap: torch.Tensor,
         discount: float,
     ) -> torch.Tensor:
-        """Projection operation that includes q_support directly"""
-        q1_proj = self.qnet1.projection(
-            obs,
-            actions,
-            rewards,
-            bootstrap,
-            discount,
-            self.q_support,
-            self.q_support.device,
-        )
-        q2_proj = self.qnet2.projection(
-            obs,
-            actions,
-            rewards,
-            bootstrap,
-            discount,
-            self.q_support,
-            self.q_support.device,
-        )
-        return q1_proj, q2_proj
+        """Projection operation that includes q_support directly (only for distributional)"""
+        if self.critic_type == "distributional":
+            q1_proj = self.qnet1.projection(
+                obs,
+                actions,
+                rewards,
+                bootstrap,
+                discount,
+                self.q_support,
+                self.q_support.device,
+            )
+            q2_proj = self.qnet2.projection(
+                obs,
+                actions,
+                rewards,
+                bootstrap,
+                discount,
+                self.q_support,
+                self.q_support.device,
+            )
+            return q1_proj, q2_proj
+        else:
+            raise NotImplementedError(
+                "Projection is only available for distributional "
+                "critic."
+            )
 
     def get_value(self, probs: torch.Tensor) -> torch.Tensor:
-        """Calculate value from logits using support"""
-        return torch.sum(probs * self.q_support, dim=1)
+        """Calculate value from logits using support (for distributional) or return scalar (for classic)"""
+        if self.critic_type == "distributional":
+            return torch.sum(
+                probs * self.q_support, dim=1
+            )
+        else:
+            # For classic QNetwork, just return the value (probs is actually value)
+            return probs.squeeze(
+                -1
+            )
 
 
 class Actor(nn.Module):
