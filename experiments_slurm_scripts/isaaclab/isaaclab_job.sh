@@ -45,7 +45,6 @@ python -m fast_td3.train \\
     --exp_name ${env_name} \\
     --seed 0 \\
     --output_dir outputs/\${SLURM_JOB_ID} \\
-    --headless \\
     --render_interval 0
 EOF
 
