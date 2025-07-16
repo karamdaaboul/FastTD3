@@ -28,6 +28,8 @@ class BaseArgs:
     """whether to use wandb"""
     checkpoint_path: str = None
     """the path to the checkpoint file"""
+    output_dir: str = None
+    """the path to the output directory"""
     num_envs: int = 128
     """the number of environments to run in parallel"""
     num_eval_envs: int = 128
@@ -125,7 +127,7 @@ class BaseArgs:
     save_interval: int = 5000
     """the interval to save the model"""
     critic_type: str = "distributional"
-    """the type of the critic"""
+    """the type of the critic: 'distributional' or 'q'"""
 
 
 def get_args():

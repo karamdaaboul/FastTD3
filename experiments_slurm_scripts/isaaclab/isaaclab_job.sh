@@ -14,9 +14,9 @@ submit_job() {
 #SBATCH --job-name=${job_name}
 #SBATCH --output=${job_name}_%j.out
 #SBATCH --error=${job_name}_%j.err
-#SBATCH --partition=short7d
+#SBATCH --partition=short1d
 #SBATCH --nodes=1
-#SBATCH --time=7-00:00:00
+#SBATCH --time=03:00:00
 #SBATCH --gpus=a100_80gb:1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=8
@@ -44,9 +44,9 @@ python -m fast_td3.train \\
     --env_name ${env_name} \\
     --exp_name ${env_name} \\
     --seed 0 \\
-    --output_dir outputs/\${SLURM_JOB_ID} \\
-    --headless \\
-    --render_interval 0
+    --render_interval 0 \\
+    --critic_type "q" \\
+    --output_dir "outputs/\${SLURM_JOB_ID}"
 EOF
 
     # Make the script executable

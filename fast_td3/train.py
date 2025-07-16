@@ -454,22 +454,21 @@ def main():
                 ).mean()
             else:
                 with torch.no_grad():
-                    q1_next, q2_next = qnet_target(
-                        next_critic_observations, next_state_actions
-                    )
-                    q1_next_val = qnet_target.get_value(q1_next)
-                    q2_next_val = qnet_target.get_value(q2_next)
-                    if args.use_cdq:
-                        target_q = torch.minimum(q1_next_val, q2_next_val)
-                    else:
-                        target_q = 0.5 * (q1_next_val + q2_next_val)
-                    target_q = rewards + bootstrap * discount * target_q
+                    qf1_next_target_value, qf2_next_target_value = qnet_target(
+                                        next_critic_observations, next_state_actions
+                                    )
+                    # in q learning there is no projection, so we use the minimum of the two q values
+                    target_q = torch.minimum(qf1_next_target_value, qf2_next_target_value)  
+                    target_q = (
+                    rewards.unsqueeze(-1)
+                    + bootstrap.unsqueeze(-1)
+                    * discount.unsqueeze(-1)
+                    * target_q
+                )
 
-                q1_pred, q2_pred = qnet(critic_observations, actions)
-                q1_pred_val = qnet.get_value(q1_pred)
-                q2_pred_val = qnet.get_value(q2_pred)
-                qf1_loss = F.mse_loss(q1_pred_val, target_q)
-                qf2_loss = F.mse_loss(q2_pred_val, target_q)
+                qf1, qf2 = qnet(critic_observations, actions)       
+                qf1_loss = F.mse_loss(qf1, target_q)
+                qf2_loss = F.mse_loss(qf2, target_q)
                 
             qf_loss = qf1_loss + qf2_loss
 
@@ -746,7 +745,7 @@ def main():
                     obs_normalizer,
                     critic_obs_normalizer,
                     args,
-                    f"models/{run_name}_{global_step}.pt",
+                    f"{args.output_dir}/models/{run_name}_{global_step}.pt",
                 )
 
         global_step += 1
@@ -762,7 +761,7 @@ def main():
         obs_normalizer,
         critic_obs_normalizer,
         args,
-        f"models/{run_name}_final.pt",
+        f"{args.output_dir}/models/{run_name}_final.pt",
     )
 
 

@@ -145,7 +145,7 @@ class Critic(nn.Module):
                 "q_support",
                 torch.linspace(v_min, v_max, num_atoms, device=device),
             )
-        else:
+        elif critic_type == "q":
             self.qnet1 = QNetwork(
                 n_obs=n_obs,
                 n_act=n_act,
@@ -159,6 +159,10 @@ class Critic(nn.Module):
                 device=device,
             )
             self.q_support = None
+        else:
+            raise NotImplementedError(
+                "Critic type must be either 'distributional' or 'q'."
+            )
         self.device = device
 
     def forward(self, obs: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
