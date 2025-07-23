@@ -1,7 +1,4 @@
-#!/bin/bash
-
-# Corrected SLURM script for IDS/TKS GPU Cluster
-# Based on actual cluster configuration and IsaacLab requirements
+#!/bin/bash -l
 
 # Function to create and submit a job for a single IsaacLab environment
 submit_job() {
@@ -10,13 +7,14 @@ submit_job() {
     
     # Create a temporary job script
     cat > "job_${env_name}.slurm" << EOF
-#!/bin/bash
+#!/bin/bash -l
+
 #SBATCH --job-name=${job_name}
 #SBATCH --output=${job_name}_%j.out
 #SBATCH --error=${job_name}_%j.err
 #SBATCH --partition=short1d
 #SBATCH --nodes=1
-#SBATCH --time=03:00:00
+#SBATCH --time=06:00:00
 #SBATCH --gpus=a100_80gb:1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=8
@@ -37,7 +35,7 @@ mkdir -p outputs/\${SLURM_JOB_ID}
 
 # Change to your FastTD3 directory - adjust path as needed
 cd /mnt/home/\${USER}/workspaces/FastTD3/
-export PYTHONPATH=/mnt/home/${USER}/workspaces/FastTD3/:$PYTHONPATH
+export PYTHONPATH=/mnt/home/\${USER}/workspaces/FastTD3/:\$PYTHONPATH
 
 # Run the training with IsaacLab-specific parameters
 python -m fast_td3.train \\
@@ -45,7 +43,6 @@ python -m fast_td3.train \\
     --exp_name ${env_name} \\
     --seed 0 \\
     --render_interval 0 \\
-    --critic_type "q" \\
     --output_dir "outputs/\${SLURM_JOB_ID}"
 EOF
 
@@ -60,7 +57,9 @@ EOF
 }
 
 # Submit jobs for all IsaacLab environments
-submit_job "Isaac-Lift-Cube-Franka-v0"
-submit_job "Isaac-Open-Drawer-Franka-v0"
-submit_job "Isaac-Velocity-Flat-H1-v0"
-submit_job "Isaac-Velocity-Flat-G1-v0"
+#submit_job "Isaac-Lift-Cube-Franka-v0"
+submit_job "Unitree-Go2-Velocity-v0"
+#submit_job "Isaac-Open-Drawer-Franka-v0"
+#submit_job "Isaac-Velocity-Flat-H1-v0"
+#submit_job "Isaac-Velocity-Flat-G1-v0"
+submit_job "Isaac-Velocity-Rough-G1-v0"
