@@ -95,7 +95,7 @@ def main():
         render_env = HumanoidBenchEnv(
             args.env_name, 1, render_mode="rgb_array", device=device
         )
-    elif args.env_name.startswith("Isaac-"):
+    elif args.env_name.startswith("Isaac-") or args.env_name.startswith("Unitree-"):       
         from fast_td3.environments.isaaclab_env import IsaacLabEnv
 
         env_type = "isaaclab"
@@ -216,7 +216,7 @@ def main():
             actor_cls = MultiTaskActor
             critic_cls = MultiTaskCritic
         else:
-            from fast_td3_simbav2 import Actor, Critic
+            from fast_td3.fast_td3_simbav2 import Actor, Critic
 
             actor_cls = Actor
             critic_cls = Critic
@@ -454,22 +454,21 @@ def main():
                 ).mean()
             else:
                 with torch.no_grad():
-                    q1_next, q2_next = qnet_target(
-                        next_critic_observations, next_state_actions
-                    )
-                    q1_next_val = qnet_target.get_value(q1_next)
-                    q2_next_val = qnet_target.get_value(q2_next)
-                    if args.use_cdq:
-                        target_q = torch.minimum(q1_next_val, q2_next_val)
-                    else:
-                        target_q = 0.5 * (q1_next_val + q2_next_val)
-                    target_q = rewards + bootstrap * discount * target_q
+                    qf1_next_target_value, qf2_next_target_value = qnet_target(
+                                        next_critic_observations, next_state_actions
+                                    )
+                    # in q learning there is no projection, so we use the minimum of the two q values
+                    target_q = torch.minimum(qf1_next_target_value, qf2_next_target_value)  
+                    target_q = (
+                    rewards.unsqueeze(-1)
+                    + bootstrap.unsqueeze(-1)
+                    * discount.unsqueeze(-1)
+                    * target_q
+                )
 
-                q1_pred, q2_pred = qnet(critic_observations, actions)
-                q1_pred_val = qnet.get_value(q1_pred)
-                q2_pred_val = qnet.get_value(q2_pred)
-                qf1_loss = F.mse_loss(q1_pred_val, target_q)
-                qf2_loss = F.mse_loss(q2_pred_val, target_q)
+                qf1, qf2 = qnet(critic_observations, actions)       
+                qf1_loss = F.mse_loss(qf1, target_q)
+                qf2_loss = F.mse_loss(qf2, target_q)
                 
             qf_loss = qf1_loss + qf2_loss
 
@@ -582,6 +581,10 @@ def main():
     pbar = tqdm.tqdm(total=args.total_timesteps, initial=global_step)
     start_time = None
     desc = ""
+    # for evaluation
+    episode_returns = torch.zeros(envs.num_envs, device=device)
+    episode_lengths = torch.zeros(envs.num_envs, device=device)
+    cumulative_rewards = torch.zeros(envs.num_envs, device=device)
 
     while global_step < args.total_timesteps:
         mark_step()
@@ -601,6 +604,11 @@ def main():
 
         next_obs, rewards, dones, infos = envs.step(actions.float())
         truncations = infos["time_outs"]
+
+        dones_mask = dones.bool()
+        episode_returns = torch.where(dones_mask, cumulative_rewards, episode_returns)
+        cumulative_rewards = torch.where(dones_mask, 0, cumulative_rewards + rewards)
+        episode_lengths = torch.where(dones_mask, 0, episode_lengths + 1)
 
         if args.reward_normalization:
             if env_type == "mtbench":
@@ -688,15 +696,21 @@ def main():
                 pbar.set_description(f"{speed: 4.4f} sps, " + desc)
                 with torch.no_grad():
                     logs = {
-                        "actor_loss": logs_dict["actor_loss"].mean(),
-                        "qf_loss": logs_dict["qf_loss"].mean(),
-                        "qf_max": logs_dict["qf_max"].mean(),
-                        "qf_min": logs_dict["qf_min"].mean(),
-                        "actor_grad_norm": logs_dict["actor_grad_norm"].mean(),
-                        "critic_grad_norm": logs_dict["critic_grad_norm"].mean(),
-                        "env_rewards": rewards.mean(),
-                        "buffer_rewards": raw_rewards.mean(),
+                        "Train/actor_loss": logs_dict["actor_loss"].mean(),
+                        "Train/qf_loss": logs_dict["qf_loss"].mean(),
+                        "Train/qf_max": logs_dict["qf_max"].mean(),
+                        "Train/qf_min": logs_dict["qf_min"].mean(),
+                        "Train/actor_grad_norm": logs_dict["actor_grad_norm"].mean(),
+                        "Train/critic_grad_norm": logs_dict["critic_grad_norm"].mean(),
+                        "Train/env_rewards": rewards.mean(),
+                        "Train/buffer_rewards": raw_rewards.mean(),
+                        "Train/mean_reward": episode_returns.mean(),
+                        "Train/mean_episode_length": episode_lengths.mean(),
                     }
+                    if "isaaclab" in infos:
+                        for k, v in infos["isaaclab"]["log"].items():
+                            logs[k] = v
+
 
                     if args.eval_interval > 0 and global_step % args.eval_interval == 0:
                         print(f"Evaluating at global step {global_step}")
@@ -704,8 +718,8 @@ def main():
                         if env_type in ["humanoid_bench", "isaaclab", "mtbench"]:
                             # NOTE: Hacky way of evaluating performance, but just works
                             obs = envs.reset()
-                        logs["eval_avg_return"] = eval_avg_return
-                        logs["eval_avg_length"] = eval_avg_length
+                        logs["Eval/eval_avg_return"] = eval_avg_return
+                        logs["Eval/eval_avg_length"] = eval_avg_length
 
                     if (
                         args.render_interval > 0
@@ -723,10 +737,10 @@ def main():
                 if args.use_wandb:
                     wandb.log(
                         {
-                            "speed": speed,
-                            "frame": global_step * args.num_envs,
-                            "critic_lr": q_scheduler.get_last_lr()[0],
-                            "actor_lr": actor_scheduler.get_last_lr()[0],
+                            "Misc/speed": speed,
+                            "Misc/frame": global_step * args.num_envs,
+                            "Misc/critic_lr": q_scheduler.get_last_lr()[0],
+                            "Misc/actor_lr": actor_scheduler.get_last_lr()[0],
                             **logs,
                         },
                         step=global_step,
@@ -746,7 +760,7 @@ def main():
                     obs_normalizer,
                     critic_obs_normalizer,
                     args,
-                    f"models/{run_name}_{global_step}.pt",
+                    f"{args.output_dir}/models/{run_name}_{global_step}.pt",
                 )
 
         global_step += 1
@@ -762,7 +776,7 @@ def main():
         obs_normalizer,
         critic_obs_normalizer,
         args,
-        f"models/{run_name}_final.pt",
+        f"{args.output_dir}/models/{run_name}_final.pt",
     )
 
 

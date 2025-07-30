@@ -1,5 +1,9 @@
 models
 wandb
 *.pyc
+*.pt
+*.err
+*.out
 .ipynb_checkpoints
 fast_td3.egg-info/
+core
