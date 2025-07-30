@@ -36,7 +36,7 @@ from fast_td3.fast_td3_utils import (
     save_params,
     mark_step,
 )
-from fast_td3.fast_td3_utils_2 import SimpleSafeReplayBuffer
+from fast_td3.fast_td3_utils_safe import SimpleSafeReplayBuffer
 from fast_td3.hyperparams import get_args
 
 torch.set_float32_matmul_precision("high")
