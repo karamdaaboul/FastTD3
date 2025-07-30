@@ -10,8 +10,8 @@ class BaseArgs:
     # See IsaacLabArgs for default hyperparameters for IsaacLab
     env_name: str = "h1hand-stand-v0"
     """the id of the environment"""
-    agent: str = "fasttd3"
-    """the agent to use: currently support [fasttd3, fasttd3_simbav2]"""
+    agent: str = "fasttd3_simbav2"
+    """the agent to use: currently support [fasttd3, fasttd3_simbav2, fasttd3_safe]"""
     seed: int = 1
     """seed of the experiment"""
     torch_deterministic: bool = True
@@ -28,6 +28,8 @@ class BaseArgs:
     """whether to use wandb"""
     checkpoint_path: str = None
     """the path to the checkpoint file"""
+    output_dir: str = None
+    """the path to the output directory"""
     num_envs: int = 128
     """the number of environments to run in parallel"""
     num_eval_envs: int = 128
@@ -125,7 +127,7 @@ class BaseArgs:
     save_interval: int = 5000
     """the interval to save the model"""
     critic_type: str = "distributional"
-    """the type of the critic"""
+    """the type of the critic: 'distributional' or 'q'"""
 
 
 def get_args():
@@ -193,7 +195,7 @@ def get_args():
     if base_args.env_name.startswith("h1hand-") or base_args.env_name.startswith("h1-"):
         # HumanoidBench
         specific_args = tyro.cli(HumanoidBenchArgs)
-    elif base_args.env_name.startswith("Isaac-"):
+    elif base_args.env_name.startswith("Isaac-")  or base_args.env_name.startswith("Unitree-"):
         # IsaacLab
         specific_args = tyro.cli(IsaacLabArgs)
     elif base_args.env_name.startswith("MTBench-"):
@@ -544,6 +546,9 @@ class UnitreeGo2VelocityArgs(IsaacLabArgs):
 @dataclass
 class IsaacGo2SafeVelocityArgs(UnitreeGo2VelocityArgs):
     env_name: str = "Unitree-Go2-Velocity-Safe"
+    agent: str = "fasttd3_safe"
     safety_critic_lr: float = 3e-4
     safety_gamma: float = 0.99
     train_safety_every: int = 1000
+    v_safe_min: float = 0.0
+    v_safe_max: float = 5.0

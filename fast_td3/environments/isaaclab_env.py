@@ -22,7 +22,6 @@ class IsaacLabEnv:
 
         import isaaclab_tasks
         import unitree_rl_lab.tasks 
-
         from isaaclab_tasks.utils.parse_cfg import parse_env_cfg
 
         env_cfg = parse_env_cfg(
@@ -46,6 +45,11 @@ class IsaacLabEnv:
         else:
             self.num_privileged_obs = 0
         self.num_actions = self.envs.unwrapped.single_action_space.shape[0]
+        # if the last word in the env name is "Safe", then it is a safe environment
+        if "Safe" in task_name:
+            self.safe_env = True
+        else:
+            self.safe_env = False
 
     def reset(self, random_start_init: bool = True) -> torch.Tensor:
         obs_dict, _ = self.envs.reset()
@@ -78,6 +82,8 @@ class IsaacLabEnv:
             "obs": obs,
             "critic_obs": critic_obs,
         }
+        if self.safe_env:
+            info_ret["cost"] = infos["cost"]
         return obs, rew, dones, info_ret
 
     def render(self):
