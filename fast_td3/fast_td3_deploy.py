@@ -23,6 +23,7 @@ class Policy(nn.Module):
         init_scale = args["init_scale"]
         actor_hidden_dim = args["actor_hidden_dim"]
 
+        self.n_obs = n_obs
         actor_kwargs = dict(
             n_obs=n_obs,
             n_act=n_act,
@@ -32,7 +33,7 @@ class Policy(nn.Module):
             hidden_dim=actor_hidden_dim,
         )
 
-        if agent == "fasttd3":
+        if agent == "fasttd3" or agent == "fasttd3_safe":
             actor_cls = Actor
         elif agent == "fasttd3_simbav2":
             actor_cls = ActorSimbaV2
@@ -80,7 +81,7 @@ def load_policy(checkpoint_path):
     args = torch_checkpoint["args"]
 
     agent = args.get("agent", "fasttd3")
-    if agent == "fasttd3":
+    if agent == "fasttd3" or agent == "fasttd3_safe":
         n_obs = torch_checkpoint["actor_state_dict"]["net.0.weight"].shape[-1]
         n_act = torch_checkpoint["actor_state_dict"]["fc_mu.0.weight"].shape[0]
     elif agent == "fasttd3_simbav2":

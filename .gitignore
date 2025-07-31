@@ -7,3 +7,4 @@ wandb
 .ipynb_checkpoints
 fast_td3.egg-info/
 core
+fast_td3/environments/isaaclab_env.py
