@@ -551,4 +551,5 @@ class IsaacGo2SafeVelocityArgs(UnitreeGo2VelocityArgs):
     safety_gamma: float = 0.99
     train_safety_every: int = 1000
     v_safe_min: float = 0.0
-    v_safe_max: float = 5.0
+    v_safe_max: float = 1.0
+    cost_threshold: float = 0.2

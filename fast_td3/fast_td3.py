@@ -240,7 +240,7 @@ class Actor(nn.Module):
         )
         self.fc_mu = nn.Sequential(
             nn.Linear(hidden_dim // 4, n_act, device=device),
-            nn.Tanh(),
+            #nn.Tanh(),
         )
         nn.init.normal_(self.fc_mu[0].weight, 0.0, init_scale)
         nn.init.constant_(self.fc_mu[0].bias, 0.0)

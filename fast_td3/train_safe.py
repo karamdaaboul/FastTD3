@@ -33,11 +33,11 @@ from fast_td3.fast_td3_utils import (
     EmpiricalNormalization,
     RewardNormalizer,
     PerTaskRewardNormalizer,
-    save_params,
     mark_step,
 )
-from fast_td3.fast_td3_utils_safe import SimpleSafeReplayBuffer
+from fast_td3.fast_td3_utils_safe import SimpleSafeReplayBuffer, save_params
 from fast_td3.hyperparams import get_args
+from fast_td3.lagrange import TD3LagrangianController
 
 torch.set_float32_matmul_precision("high")
 
@@ -45,7 +45,6 @@ try:
     import jax.numpy as jnp
 except ImportError:
     pass
-
 
 def main():
     args = get_args()
@@ -86,6 +85,7 @@ def main():
             raise ValueError("No GPU available")
     print(f"Using device: {device}")
 
+    # Environment setup (unchanged - keeping your existing environment code)
     if args.env_name.startswith("h1hand-") or args.env_name.startswith("h1-"):
         from environments.humanoid_bench_env import HumanoidBenchEnv
 
@@ -119,7 +119,6 @@ def main():
     else:
         from fast_td3.environments.mujoco_playground_env import make_env
 
-        # TODO: Check if re-using same envs for eval could reduce memory usage
         env_type = "mujoco_playground"
         envs, eval_envs, render_env = make_env(
             args.env_name,
@@ -142,8 +141,9 @@ def main():
         )
     else:
         n_critic_obs = n_obs
-    action_low, action_high = -1.0, 1.0
+    action_low, action_high = -3.0, 3.0
 
+    # Normalization setup (unchanged)
     if args.obs_normalization:
         obs_normalizer = EmpiricalNormalization(shape=n_obs, device=device)
         critic_obs_normalizer = EmpiricalNormalization(
@@ -170,6 +170,7 @@ def main():
     else:
         reward_normalizer = nn.Identity()
 
+    # Model setup (unchanged)
     actor_kwargs = {
         "n_obs": n_obs,
         "n_act": n_act,
@@ -199,72 +200,61 @@ def main():
     if args.agent == "fasttd3_safe":
         if env_type in ["mtbench"]:
             from fast_td3 import MultiTaskActor, MultiTaskCritic
-
             actor_cls = MultiTaskActor
             critic_cls = MultiTaskCritic
         else:
             from fast_td3 import Actor, Critic
-
             actor_cls = Actor
             critic_cls = Critic
-
         print("Using FastTD3")
     elif args.agent == "fasttd3_simbav2":
         if env_type in ["mtbench"]:
             from fast_td3_simbav2 import MultiTaskActor, MultiTaskCritic
-
             actor_cls = MultiTaskActor
             critic_cls = MultiTaskCritic
         else:
             from fast_td3_simbav2 import Actor, Critic
-
             actor_cls = Actor
             critic_cls = Critic
-
         print("Using FastTD3 + SimbaV2")
         actor_kwargs.pop("init_scale")
-        actor_kwargs.update(
-            {
-                "scaler_init": math.sqrt(2.0 / args.actor_hidden_dim),
-                "scaler_scale": math.sqrt(2.0 / args.actor_hidden_dim),
-                "alpha_init": 1.0 / (args.actor_num_blocks + 1),
-                "alpha_scale": 1.0 / math.sqrt(args.actor_hidden_dim),
-                "expansion": 4,
-                "c_shift": 3.0,
-                "num_blocks": args.actor_num_blocks,
-            }
-        )
-        critic_kwargs.update(
-            {
-                "scaler_init": math.sqrt(2.0 / args.critic_hidden_dim),
-                "scaler_scale": math.sqrt(2.0 / args.critic_hidden_dim),
-                "alpha_init": 1.0 / (args.critic_num_blocks + 1),
-                "alpha_scale": 1.0 / math.sqrt(args.critic_hidden_dim),
-                "num_blocks": args.critic_num_blocks,
-                "expansion": 4,
-                "c_shift": 3.0,
-            }
-        )
+        actor_kwargs.update({
+            "scaler_init": math.sqrt(2.0 / args.actor_hidden_dim),
+            "scaler_scale": math.sqrt(2.0 / args.actor_hidden_dim),
+            "alpha_init": 1.0 / (args.actor_num_blocks + 1),
+            "alpha_scale": 1.0 / math.sqrt(args.actor_hidden_dim),
+            "expansion": 4,
+            "c_shift": 3.0,
+            "num_blocks": args.actor_num_blocks,
+        })
+        critic_kwargs.update({
+            "scaler_init": math.sqrt(2.0 / args.critic_hidden_dim),
+            "scaler_scale": math.sqrt(2.0 / args.critic_hidden_dim),
+            "alpha_init": 1.0 / (args.critic_num_blocks + 1),
+            "alpha_scale": 1.0 / math.sqrt(args.critic_hidden_dim),
+            "num_blocks": args.critic_num_blocks,
+            "expansion": 4,
+            "c_shift": 3.0,
+        })
     else:
         raise ValueError(f"Agent {args.agent} not supported")
 
     actor = actor_cls(**actor_kwargs)
 
     if env_type in ["mtbench"]:
-        # Python 3.8 doesn't support 'from_module' in tensordict
         policy = actor.explore
     else:
         from tensordict import from_module
-
         actor_detach = actor_cls(**actor_kwargs)
-        # Copy params to actor_detach without grad
         from_module(actor).data.to_module(actor_detach)
         policy = actor_detach.explore
 
+    # Critics setup
     qnet = critic_cls(**critic_kwargs)
     qnet_target = critic_cls(**critic_kwargs)
     qnet_target.load_state_dict(qnet.state_dict())
 
+    # Optimizers
     q_optimizer = optim.AdamW(
         list(qnet.parameters()),
         lr=torch.tensor(args.critic_learning_rate, device=device),
@@ -276,7 +266,7 @@ def main():
         weight_decay=args.weight_decay,
     )
 
-    # Add learning rate schedulers
+    # Schedulers
     q_scheduler = optim.lr_scheduler.CosineAnnealingLR(
         q_optimizer,
         T_max=args.total_timesteps,
@@ -288,13 +278,11 @@ def main():
         eta_min=torch.tensor(args.actor_learning_rate_end, device=device),
     )
 
-    # ---------------------------------------------------------------- #
-    # Safety distributional critic (same architecture as reward critic)
-    # ---------------------------------------------------------------- #
+    # Safety critic setup
     critic_kwargs["v_min"] = args.v_safe_min
     critic_kwargs["v_max"] = args.v_safe_max
-    safety_qnet        = critic_cls(**critic_kwargs)          # Q_C
-    safety_qnet_target = critic_cls(**critic_kwargs)          # \bar{Q}_C
+    safety_qnet = critic_cls(**critic_kwargs)
+    safety_qnet_target = critic_cls(**critic_kwargs)
     safety_qnet_target.load_state_dict(safety_qnet.state_dict())
 
     safety_optimizer = optim.AdamW(
@@ -308,7 +296,18 @@ def main():
         eta_min=torch.tensor(args.critic_learning_rate_end, device=device),
     )
 
+    # Lagrangian controller
+    lagrangian_controller = TD3LagrangianController(
+        cost_threshold=args.cost_threshold,
+        kp=0.05,
+        ki=0.0005,
+        kd=0.1,
+        lambda_lr=0.001,
+        lambda_max=100.0,
+        device=device,
+    )
 
+    # Replay buffer
     rb = SimpleSafeReplayBuffer(
         n_env=args.num_envs,
         buffer_size=args.buffer_size,
@@ -336,7 +335,6 @@ def main():
         else:
             obs = eval_envs.reset()
 
-        # Run for a fixed number of steps
         for i in range(eval_envs.max_episode_steps):
             with torch.no_grad(), autocast(
                 device_type=amp_device_type,
@@ -349,7 +347,6 @@ def main():
             next_obs, rewards, dones, infos = eval_envs.step(actions.float())
 
             if env_type == "mtbench":
-                # We only report success rate in MTBench evaluation
                 rewards = (
                     infos["episode"]["success"].float()
                     if "episode" in infos else 0.0
@@ -370,7 +367,6 @@ def main():
         return episode_returns.mean().item(), episode_lengths.mean().item()
 
     def render_with_rollout():
-        # Quick rollout for rendering
         if env_type == "humanoid_bench":
             obs = render_env.reset()
             renders = [render_env.render()]
@@ -436,7 +432,7 @@ def main():
                 action_low, action_high
             )
             discount = args.gamma ** data["next"]["effective_n_steps"]
-            # ------------- distributional projection -------------
+            
             if args.critic_type == "distributional":
                 with torch.no_grad():
                     qf1_next_target_projected, qf2_next_target_projected = (
@@ -517,28 +513,25 @@ def main():
     def update_safety(data, logs_dict):
         """
         Distributional TD-backup for the cost critic Q_C.
-        The logic is literally the same as reward critic,
-        only `rewards` -> `costs` and we keep the sign (+)
-        because we learn expected cumulative cost.
         """
         with autocast(device_type=amp_device_type,
                     dtype=amp_dtype,
                     enabled=amp_enabled):
-            observations       = data["observations"]
-            next_observations  = data["next"]["observations"]
+            observations = data["observations"]
+            next_observations = data["next"]["observations"]
 
             if envs.asymmetric_obs:
-                critic_observations      = data["critic_observations"]
+                critic_observations = data["critic_observations"]
                 next_critic_observations = data["next"]["critic_observations"]
             else:
-                critic_observations      = observations
+                critic_observations = observations
                 next_critic_observations = next_observations
 
-            actions       = data["actions"]
-            costs         = data["next"]["costs"]                      # <-- HERE
-            dones         = data["next"]["dones"].bool()
-            truncations   = data["next"]["truncations"].bool()
-            bootstrap     = (truncations | ~dones).float()
+            actions = data["actions"]
+            costs = data["next"]["costs"]
+            dones = data["next"]["dones"].bool()
+            truncations = data["next"]["truncations"].bool()
+            bootstrap = (truncations | ~dones).float()
 
             clipped_noise = torch.randn_like(actions).mul(policy_noise).clamp(
                 -noise_clip, noise_clip
@@ -546,14 +539,13 @@ def main():
             next_state_actions = (actor(next_observations) + clipped_noise).clamp(
                 action_low, action_high
             )
-            discount = args.safety_gamma ** data["next"]["effective_n_steps"]
+            discount = args.gamma ** data["next"]["effective_n_steps"]
 
-            # ------------- distributional projection -------------
             with torch.no_grad():
                 q1_next_tgt_proj, q2_next_tgt_proj = safety_qnet_target.projection(
                     next_critic_observations,
                     next_state_actions,
-                    costs,                     # <- immediate "reward" is cost
+                    costs,
                     bootstrap,
                     discount,
                 )
@@ -576,7 +568,7 @@ def main():
             q1_loss = -torch.sum(q1_next_tgt_dist * F.log_softmax(q1, dim=1), dim=1).mean()
             q2_loss = -torch.sum(q2_next_tgt_dist * F.log_softmax(q2, dim=1), dim=1).mean()
             safety_loss = q1_loss + q2_loss
-        # ---------------------------------------------------------
+
         safety_optimizer.zero_grad(set_to_none=True)
         scaler.scale(safety_loss).backward()
         scaler.unscale_(safety_optimizer)
@@ -592,36 +584,61 @@ def main():
         scaler.step(safety_optimizer)
         scaler.update()
 
-        logs_dict["safety_loss"]      = safety_loss.detach()
+        logs_dict["safety_loss"] = safety_loss.detach()
         logs_dict["safety_grad_norm"] = safety_grad_norm.detach()
+        logs_dict["safety_qf_max"] = q1_val.max().detach()
+        logs_dict["safety_qf_min"] = q1_val.min().detach()
         return logs_dict
 
-    def update_pol(data, logs_dict):
-        with autocast(
-            device_type=amp_device_type, dtype=amp_dtype, enabled=amp_enabled
-        ):
+    # FIXED: Separate policy update function that takes lambda as parameter
+    def update_pol_constrained(data, lambda_value, logs_dict):
+        """
+        TD3 actor update with Lagrangian safety constraints
+        Lambda value is passed as parameter (updated externally)
+        """
+        with autocast(device_type=amp_device_type, dtype=amp_dtype, enabled=amp_enabled):
             critic_observations = (
                 data["critic_observations"]
                 if envs.asymmetric_obs
                 else data["observations"]
             )
 
-            qf1, qf2 = qnet(critic_observations, actor(data["observations"]))
+            # Get current actions from actor
+            current_actions = actor(data["observations"])
+
+            # Reward Q-values (existing TD3 approach)
+            qf1, qf2 = qnet(critic_observations, current_actions)
             if args.critic_type == "distributional":
                 qf1_value = qnet.get_value(F.softmax(qf1, dim=1))
                 qf2_value = qnet.get_value(F.softmax(qf2, dim=1))
             else:
                 qf1_value = qnet.get_value(qf1)
                 qf2_value = qnet.get_value(qf2)
+                
             if args.use_cdq:
-                qf_value = torch.minimum(qf1_value, qf2_value)
+                reward_qf_value = torch.minimum(qf1_value, qf2_value)
             else:
-                qf_value = (qf1_value + qf2_value) / 2.0
-            actor_loss = -qf_value.mean()
+                reward_qf_value = (qf1_value + qf2_value) / 2.0
 
+            # Safety Q-values (NEW for TD3-Lagrangian)
+            safety_qf1, safety_qf2 = safety_qnet(critic_observations, current_actions)
+            safety_qf1_value = safety_qnet.get_value(F.softmax(safety_qf1, dim=1))
+            safety_qf2_value = safety_qnet.get_value(F.softmax(safety_qf2, dim=1))
+            
+            if args.use_cdq:
+                safety_qf_value = torch.minimum(safety_qf1_value, safety_qf2_value)
+            else:
+                safety_qf_value = (safety_qf1_value + safety_qf2_value) / 2.0
+
+            # TD3-Lagrangian Actor Loss: maximize reward, minimize expected cost
+            # Use the lambda_value passed as parameter (no update inside this function)
+            actor_loss = -reward_qf_value.mean() + lambda_value * safety_qf_value.mean()
+
+        # Optimization
         actor_optimizer.zero_grad(set_to_none=True)
         scaler.scale(actor_loss).backward()
         scaler.unscale_(actor_optimizer)
+        
         if args.use_grad_norm_clipping:
             actor_grad_norm = torch.nn.utils.clip_grad_norm_(
                 actor.parameters(),
@@ -629,24 +646,47 @@ def main():
             )
         else:
             actor_grad_norm = torch.tensor(0.0, device=device)
+            
         scaler.step(actor_optimizer)
         scaler.update()
-        logs_dict["actor_grad_norm"] = actor_grad_norm.detach()
+
         logs_dict["actor_loss"] = actor_loss.detach()
+        logs_dict["actor_grad_norm"] = actor_grad_norm.detach()
+        logs_dict["safety_qf_value_mean"] = safety_qf_value.mean().detach()
+        logs_dict["reward_qf_value_mean"] = reward_qf_value.mean().detach()
+        
         return logs_dict
+
+    # FIXED: Separate function to update lagrangian multiplier
+    def update_lagrangian_multiplier(data, lagrangian_controller, logs_dict):
+        """
+        Update Lagrangian multiplier based on current cost data
+        This runs outside the compiled policy update
+        """
+        # Get current episode cost for Lagrangian update
+        current_episode_cost = data["next"]["costs"].mean().item()
+        lambda_value = lagrangian_controller.update(current_episode_cost)
+        
+        # Add Lagrangian logs
+        lagrangian_logs = lagrangian_controller.get_logs()
+        logs_dict.update(lagrangian_logs)
+        
+        return lambda_value, logs_dict
 
     @torch.no_grad()
     def soft_update(src, tgt, tau: float):
         src_ps = [p.data for p in src.parameters()]
         tgt_ps = [p.data for p in tgt.parameters()]
-
         torch._foreach_mul_(tgt_ps, 1.0 - tau)
         torch._foreach_add_(tgt_ps, src_ps, alpha=tau)
 
+    # CRITICAL FIX: Exclude policy update from compilation to avoid CUDA graph issues
     if args.compile:
         compile_mode = args.compile_mode
         update_main = torch.compile(update_main, mode=compile_mode)
-        update_pol = torch.compile(update_pol, mode=compile_mode)
+        update_safety = torch.compile(update_safety, mode=compile_mode)
+        # DON'T compile the constrained policy update to avoid Lagrangian controller issues
+        # update_pol_constrained = torch.compile(update_pol_constrained, mode=compile_mode)
         policy = torch.compile(policy, mode=None)
         normalize_obs = torch.compile(obs_normalizer.forward, mode=None)
         normalize_critic_obs = torch.compile(critic_obs_normalizer.forward, mode=None)
@@ -660,13 +700,14 @@ def main():
             update_stats = reward_normalizer.update_stats
         normalize_reward = reward_normalizer.forward
 
+    # Environment initialization
     if envs.asymmetric_obs:
         obs, critic_obs = envs.reset_with_critic_obs()
         critic_obs = torch.as_tensor(critic_obs, device=device, dtype=torch.float)
     else:
         obs = envs.reset()
+        
     if args.checkpoint_path:
-        # Load checkpoint if specified
         torch_checkpoint = torch.load(
             f"{args.checkpoint_path}", map_location=device, weights_only=False
         )
@@ -686,6 +727,7 @@ def main():
     start_time = None
     desc = ""
 
+    # Main training loop
     while global_step < args.total_timesteps:
         mark_step()
         logs_dict = TensorDict()
@@ -715,7 +757,7 @@ def main():
 
         if envs.asymmetric_obs:
             next_critic_obs = infos["observations"]["critic"]
-        # Compute 'true' next_obs and next_critic_obs for saving
+            
         true_next_obs = torch.where(
             dones[:, None] > 0, infos["observations"]["raw"]["obs"], next_obs
         )
@@ -735,8 +777,8 @@ def main():
                     "rewards": torch.as_tensor(
                         rewards, device=device, dtype=torch.float
                     ),
-                    "costs":    torch.as_tensor(
-                        infos["cost"],   device=device, dtype=torch.float
+                    "costs": torch.as_tensor(
+                        infos["cost"], device=device, dtype=torch.float
                     ),
                     "truncations": truncations.long(),
                     "dones": dones.long(),
@@ -754,6 +796,7 @@ def main():
         if envs.asymmetric_obs:
             critic_obs = next_critic_obs
 
+        # Training updates
         if global_step > args.learning_starts:
             for i in range(args.num_updates):
                 data = rb.sample(max(1, args.batch_size // args.num_envs))
@@ -770,7 +813,6 @@ def main():
                     )
                 raw_rewards = data["next"]["rewards"]
                 if env_type in ["mtbench"] and args.reward_normalization:
-                    # Multi-task reward normalization
                     task_ids_one_hot = data["observations"][..., -envs.num_tasks :]
                     task_indices = torch.argmax(task_ids_one_hot, dim=1)
                     data["next"]["rewards"] = normalize_reward(
@@ -782,15 +824,22 @@ def main():
                 logs_dict = update_main(data, logs_dict)
                 logs_dict = update_safety(data, logs_dict)
 
+                # CRITICAL FIX: Update Lagrangian multiplier OUTSIDE policy update
+                lambda_value, logs_dict = update_lagrangian_multiplier(data, lagrangian_controller, logs_dict)
+
+                # CRITICAL: Use constrained policy update with external lambda value
                 if args.num_updates > 1:
                     if i % args.policy_frequency == 1:
-                        logs_dict = update_pol(data, logs_dict)
+                        logs_dict = update_pol_constrained(data, lambda_value, logs_dict)
                 else:
                     if global_step % args.policy_frequency == 0:
-                        logs_dict = update_pol(data, logs_dict)
+                        logs_dict = update_pol_constrained(data, lambda_value, logs_dict)
 
+                # CRITICAL: Update both target networks
                 soft_update(qnet, qnet_target, args.tau)
+                soft_update(safety_qnet, safety_qnet_target, args.tau)
 
+            # Logging
             if global_step % 100 == 0 and start_time is not None:
                 speed = (global_step - measure_burnin) / (time.time() - start_time)
                 pbar.set_description(f"{speed: 4.4f} sps, " + desc)
@@ -800,10 +849,16 @@ def main():
                         "qf_loss": logs_dict["qf_loss"].mean(),
                         "qf_max": logs_dict["qf_max"].mean(),
                         "qf_min": logs_dict["qf_min"].mean(),
+                        "safety_qf_max": logs_dict["safety_qf_max"].mean(),
+                        "safety_qf_min": logs_dict["safety_qf_min"].mean(),
                         "actor_grad_norm": logs_dict["actor_grad_norm"].mean(),
                         "critic_grad_norm": logs_dict["critic_grad_norm"].mean(),
                         "safety_loss": logs_dict["safety_loss"].mean(),
                         "safety_grad_norm": logs_dict["safety_grad_norm"].mean(),
+                        "lagrangian_multiplier": logs_dict.get("lagrangian_multiplier", 0.0),
+                        "constraint_violation": logs_dict.get("constraint_violation", 0.0),
+                        "safety_qf_value_mean": logs_dict["safety_qf_value_mean"].mean(),
+                        "reward_qf_value_mean": logs_dict["reward_qf_value_mean"].mean(),
                         "env_rewards": rewards.mean(),
                         "buffer_rewards": raw_rewards.mean(),
                         "env_costs": infos["cost"].mean(),
@@ -814,7 +869,6 @@ def main():
                         print(f"Evaluating at global step {global_step}")
                         eval_avg_return, eval_avg_length = evaluate()
                         if env_type in ["humanoid_bench", "isaaclab", "mtbench"]:
-                            # NOTE: Hacky way of evaluating performance, but just works
                             obs = envs.reset()
                         logs["eval_avg_return"] = eval_avg_return
                         logs["eval_avg_length"] = eval_avg_length
@@ -825,13 +879,12 @@ def main():
                     ):
                         renders = render_with_rollout()
                         render_video = wandb.Video(
-                            np.array(renders).transpose(
-                                0, 3, 1, 2
-                            ),  # Convert to (T, C, H, W) format
+                            np.array(renders).transpose(0, 3, 1, 2),
                             fps=30,
                             format="gif",
                         )
                         logs["render_video"] = render_video
+                        
                 if args.use_wandb:
                     wandb.log(
                         {
@@ -867,6 +920,7 @@ def main():
         global_step += 1
         actor_scheduler.step()
         q_scheduler.step()
+        safety_scheduler.step()
         pbar.update(1)
 
     save_params(
@@ -881,7 +935,6 @@ def main():
         args,
         f"models/{run_name}_final.pt",
     )
-
 
 if __name__ == "__main__":
     main()
