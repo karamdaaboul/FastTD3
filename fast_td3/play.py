@@ -90,8 +90,6 @@ def main():
                         help="Parallel environments to launch in Isaac-Lab")
     parser.add_argument("--episodes", type=int, default=10,
                         help="Number of roll-outs to run")
-    parser.add_argument("--render", action="store_true",
-                        help="Render with Isaac-Sim GUI (slow)")
     args = parser.parse_args()
 
     # -------------------------------------------------------------------------
