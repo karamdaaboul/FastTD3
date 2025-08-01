@@ -77,6 +77,9 @@ def main():
                         help="Run Isaac-Sim in headless mode")
     parser.add_argument("--episodes", type=int, default=10,
                         help="Number of roll-outs to run")
+    parser.add_argument("--enable_cameras", action="store_true",
+                        default=False,
+                        help="Enable cameras")
     args = parser.parse_args()
 
     signal.signal(signal.SIGINT, graceful_exit)   # Ctrl-C handler
@@ -91,6 +94,7 @@ def main():
         num_envs=1,
         seed=0,
         headless=args.headless,
+        enable_cameras=args.enable_cameras,
     )
 
     # ---------------- Policy ---------------------

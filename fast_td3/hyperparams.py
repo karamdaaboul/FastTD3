@@ -181,6 +181,7 @@ def get_args():
         "Isaac-Repose-Cube-Shadow-Direct-v0": IsaacReposeCubeShadowDirectArgs,
         "Unitree-Go2-Velocity": UnitreeGo2VelocityArgs,
         "Unitree-Go2-Velocity-Safe": IsaacGo2SafeVelocityArgs,
+        "Unitree-Go2-Velocity-Real": UnitreeGo2VelocityRealArgs,
         # MTBench
         "MTBench-meta-world-v2-mt10": MetaWorldMT10Args,
         "MTBench-meta-world-v2-mt50": MetaWorldMT50Args,
@@ -530,6 +531,7 @@ class IsaacReposeCubeShadowDirectArgs(IsaacLabArgs):
 @dataclass
 class UnitreeGo2VelocityArgs(IsaacLabArgs):
     env_name: str = "Unitree-Go2-Velocity"
+    agent: str = "fasttd3"
     num_steps: int = 8
     num_updates: int = 4
     total_timesteps: int = 50000
@@ -538,9 +540,7 @@ class UnitreeGo2VelocityArgs(IsaacLabArgs):
     std_min: float = 0.2
     std_max: float = 0.8
     policy_noise: float = 0.2
-
-    action_bounds = 1.0
-
+    action_bounds = 3.0
     buffer_size: int = 1024 * 5  # To reduce memory usage
 
 @dataclass
@@ -553,3 +553,11 @@ class IsaacGo2SafeVelocityArgs(UnitreeGo2VelocityArgs):
     v_safe_min: float = 0.0
     v_safe_max: float = 1.0
     cost_threshold: float = 0.2
+
+@dataclass
+class UnitreeGo2VelocityRealArgs(UnitreeGo2VelocityArgs):
+    env_name: str = "Unitree-Go2-Velocity-Real"
+    agent: str = "fasttd3"
+    num_steps: int = 8
+    num_updates: int = 4
+    total_timesteps: int = 50000

@@ -15,10 +15,11 @@ class IsaacLabEnv:
         seed: int,
         action_bounds: Optional[float] = None,
         headless: bool = True,
+        enable_cameras: bool = False,
     ):
         from isaaclab.app import AppLauncher
 
-        app_launcher = AppLauncher(headless=headless, device=device)
+        app_launcher = AppLauncher(headless=headless, device=device, enable_cameras=enable_cameras)
         simulation_app = app_launcher.app
 
         import isaaclab_tasks
