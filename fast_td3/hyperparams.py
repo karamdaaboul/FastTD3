@@ -540,7 +540,7 @@ class UnitreeGo2VelocityArgs(IsaacLabArgs):
     std_min: float = 0.2
     std_max: float = 0.8
     policy_noise: float = 0.2
-    action_bounds = 3.0
+    action_bounds: float = 3.0
     buffer_size: int = 1024 * 5  # To reduce memory usage
 
 @dataclass
